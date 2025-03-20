@@ -170,18 +170,19 @@ func sanitizeFilename(filename string) string {
 	return result
 }
 
-// 文档链接信息结构
-type DocLinkInfo struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
-	Type  string `json:"type"`
+// 文档节点结构，用于构建树状结构
+type DocNode struct {
+	Title    string     `json:"title"`
+	URL      string     `json:"url"`
+	Type     string     `json:"type"`
+	Children []*DocNode `json:"children"`
 }
 
-// 知识库文档链接列表响应
-type WikiDocsResponse struct {
-	Success bool          `json:"success"`
-	Message string        `json:"message"`
-	Docs    []DocLinkInfo `json:"docs"`
+// 知识库文档树响应
+type WikiDocsTreeResponse struct {
+	Success bool     `json:"success"`
+	Message string   `json:"message"`
+	Tree    *DocNode `json:"tree"`
 }
 
 // 获取知识库所有文档链接的处理函数
@@ -189,17 +190,23 @@ func getWikiDocsHandler(c *gin.Context) {
 	// 获取参数
 	wikiURL, err := url.QueryUnescape(c.Query("url"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, WikiDocsResponse{
+		c.JSON(http.StatusBadRequest, WikiDocsTreeResponse{
 			Success: false,
 			Message: "无效的知识库URL",
 		})
 		return
 	}
 
+	// 获取输出路径参数
+	outputPath := c.Query("output_path")
+	if outputPath == "" {
+		outputPath = "output" // 默认输出路径
+	}
+
 	// 验证知识库URL
 	docType, spaceToken, err := utils.ValidateDocumentURL(wikiURL)
 	if err != nil || docType != "wiki" {
-		c.JSON(http.StatusBadRequest, WikiDocsResponse{
+		c.JSON(http.StatusBadRequest, WikiDocsTreeResponse{
 			Success: false,
 			Message: "无效的知识库URL，请确保提供的是知识库设置链接",
 		})
@@ -219,40 +226,28 @@ func getWikiDocsHandler(c *gin.Context) {
 	// 获取知识库根节点
 	rootNode, err := client.GetWikiNodeInfo(ctx, spaceToken)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, WikiDocsResponse{
+		c.JSON(http.StatusInternalServerError, WikiDocsTreeResponse{
 			Success: false,
 			Message: fmt.Sprintf("获取知识库信息失败: %s", err),
 		})
 		return
 	}
 
-	// 将 lark.GetWikiNodeRespNode 转换为 core.WikiNode
-	wikiRootNode := &core.WikiNode{
-		NodeToken: rootNode.NodeToken,
-		ObjToken:  rootNode.ObjToken,
-		ObjType:   rootNode.ObjType,
-		Title:     rootNode.Title,
-		SpaceID:   rootNode.SpaceID,
-	}
+	// 添加调试日志
+	fmt.Printf("空间名称: %s, 节点Token: %s\n", rootNode.Title, rootNode.NodeToken)
 
-	// 递归获取所有文档链接
-	var docLinks []DocLinkInfo
-
-	// 首先处理根节点本身
-	if wikiRootNode.ObjType == "docx" || wikiRootNode.ObjType == "doc" {
-		docURL := fmt.Sprintf("https://feishu.cn/docx/%s", wikiRootNode.ObjToken)
-		docLinks = append(docLinks, DocLinkInfo{
-			Title: wikiRootNode.Title,
-			URL:   docURL,
-			Type:  wikiRootNode.ObjType,
-		})
-		fmt.Printf("添加根文档: %s\n", wikiRootNode.Title)
+	// 创建根文档节点
+	docTree := &DocNode{
+		Title:    rootNode.Title,
+		URL:      fmt.Sprintf("https://feishu.cn/wiki/%s", rootNode.NodeToken),
+		Type:     "space",
+		Children: []*DocNode{},
 	}
 
 	// 获取知识库中的顶级节点列表
-	topNodes, err := client.GetWikiNodeList(ctx, wikiRootNode.SpaceID, nil)
+	topNodes, err := client.GetWikiNodeList(ctx, rootNode.SpaceID, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, WikiDocsResponse{
+		c.JSON(http.StatusInternalServerError, WikiDocsTreeResponse{
 			Success: false,
 			Message: fmt.Sprintf("获取知识库顶级节点失败: %s", err),
 		})
@@ -268,40 +263,74 @@ func getWikiDocsHandler(c *gin.Context) {
 			ObjToken:  item.ObjToken,
 			ObjType:   item.ObjType,
 			Title:     item.Title,
-			SpaceID:   wikiRootNode.SpaceID,
+			SpaceID:   rootNode.SpaceID,
 		}
 
-		err = collectWikiDocs(ctx, client, topNode, &docLinks)
+		// 创建顶级文档节点
+		docNode := &DocNode{
+			Title:    topNode.Title,
+			Children: []*DocNode{},
+		}
+
+		// 设置URL和类型
+		if topNode.ObjType == "docx" || topNode.ObjType == "doc" {
+			docNode.URL = fmt.Sprintf("https://feishu.cn/docx/%s", topNode.ObjToken)
+			docNode.Type = topNode.ObjType
+		} else {
+			docNode.URL = fmt.Sprintf("https://feishu.cn/wiki/%s", topNode.NodeToken)
+			docNode.Type = "folder"
+		}
+
+		// 递归构建文档树
+		err = buildDocTree(ctx, client, topNode, docNode)
 		if err != nil {
 			fmt.Printf("处理顶级节点 %s 失败: %s\n", topNode.Title, err)
 			// 继续处理其他节点
 		}
+
+		// 添加到根节点
+		docTree.Children = append(docTree.Children, docNode)
 	}
 
-	// 返回文档链接列表
-	c.JSON(http.StatusOK, WikiDocsResponse{
+	// 生成树状结构的文本文件
+	treeText := generateTreeText(docTree, 0)
+
+	// 确保输出目录存在
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, WikiDocsTreeResponse{
+			Success: false,
+			Message: fmt.Sprintf("创建输出目录失败: %s", err),
+		})
+		return
+	}
+
+	// 保存树状结构文本到文件 - 使用空间名称作为文件名
+	spaceName := sanitizeFilename(rootNode.Title)
+	// 添加调试日志
+	fmt.Printf("处理后的空间名称: %s\n", spaceName)
+	treeFilePath := filepath.Join(outputPath, spaceName+"_文档树.md")
+	fmt.Printf("完整文件路径: %s\n", treeFilePath)
+	err = os.WriteFile(treeFilePath, []byte(treeText), 0644)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, WikiDocsTreeResponse{
+			Success: false,
+			Message: fmt.Sprintf("保存文档树文件失败: %s", err),
+		})
+		return
+	}
+
+	// 返回文档树
+	c.JSON(http.StatusOK, WikiDocsTreeResponse{
 		Success: true,
-		Message: fmt.Sprintf("成功获取 %d 个文档链接", len(docLinks)),
-		Docs:    docLinks,
+		Message: fmt.Sprintf("成功生成文档树，已保存到 %s", treeFilePath),
+		Tree:    docTree,
 	})
 }
 
-// 递归收集知识库中的所有文档链接
-func collectWikiDocs(ctx context.Context, client *core.Client, node *core.WikiNode, docLinks *[]DocLinkInfo) error {
+// 递归构建文档树
+func buildDocTree(ctx context.Context, client *core.Client, node *core.WikiNode, docNode *DocNode) error {
 	// 打印当前处理的节点信息，帮助调试
 	fmt.Printf("处理节点: %s, 类型: %s\n", node.Title, node.ObjType)
-
-	// 如果是文档节点，添加到链接列表
-	if node.ObjType == "docx" || node.ObjType == "doc" {
-		// 使用更通用的URL格式
-		docURL := fmt.Sprintf("https://feishu.cn/docx/%s", node.ObjToken)
-		*docLinks = append(*docLinks, DocLinkInfo{
-			Title: node.Title,
-			URL:   docURL,
-			Type:  node.ObjType,
-		})
-		fmt.Printf("添加文档: %s\n", node.Title)
-	}
 
 	// 添加延迟，避免触发限速
 	time.Sleep(100 * time.Millisecond)
@@ -336,12 +365,52 @@ func collectWikiDocs(ctx context.Context, client *core.Client, node *core.WikiNo
 
 	// 递归处理子节点
 	for _, child := range children {
-		err := collectWikiDocs(ctx, client, child, docLinks)
+		childNode := &DocNode{
+			Title:    child.Title,
+			Children: []*DocNode{},
+		}
+
+		// 设置URL和类型
+		if child.ObjType == "docx" || child.ObjType == "doc" {
+			childNode.URL = fmt.Sprintf("https://feishu.cn/docx/%s", child.ObjToken)
+			childNode.Type = child.ObjType
+		} else {
+			childNode.URL = fmt.Sprintf("https://feishu.cn/wiki/%s", child.NodeToken)
+			childNode.Type = "folder"
+		}
+
+		// 递归处理子节点
+		err := buildDocTree(ctx, client, child, childNode)
 		if err != nil {
 			log.Printf("处理子节点 %s 失败: %s", child.Title, err)
 			// 继续处理其他子节点，不中断
 		}
+
+		// 添加到父节点
+		docNode.Children = append(docNode.Children, childNode)
 	}
 
 	return nil
+}
+
+// 生成树状结构的文本
+func generateTreeText(node *DocNode, level int) string {
+	var result strings.Builder
+
+	// 添加缩进
+	indent := strings.Repeat("  ", level)
+
+	// 添加当前节点
+	if node.Type == "docx" || node.Type == "doc" {
+		result.WriteString(fmt.Sprintf("%s- [%s](%s)\n", indent, node.Title, node.URL))
+	} else {
+		result.WriteString(fmt.Sprintf("%s- **%s**\n", indent, node.Title))
+	}
+
+	// 递归处理子节点
+	for _, child := range node.Children {
+		result.WriteString(generateTreeText(child, level+1))
+	}
+
+	return result.String()
 }
