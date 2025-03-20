@@ -40,6 +40,8 @@ pubspec.lock
 # 应用程序生成的文件
 *.log
 *.md
+# 但不忽略 README.md
+!README.md
 output/
 downloads/
 temp/
