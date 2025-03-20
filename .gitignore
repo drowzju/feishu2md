@@ -11,13 +11,48 @@ go.work
 # Flutter相关
 **/build/
 **/ios/Flutter/.last_build_id
+# 检查和更新 .gitignore 文件
+
+我来帮您检查和更新 .gitignore 文件，确保屏蔽一些过程生成的文件。
+
+首先，让我们创建或更新项目的 .gitignore 文件：
+```plaintext
+# Flutter/Dart 相关
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
 .pub-cache/
 .pub/
-/build/
+build/
+*.iml
+*.lock
+pubspec.lock
+
+# IDE 相关
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+
+# 应用程序生成的文件
+*.log
+*.md
+output/
+downloads/
+temp/
+
+# 飞书API相关
+config.json
+token.json
+credentials.json
+
+# 其他
+.env
+.env.local
+```
 .DS_Store
 
 # IDE相关
