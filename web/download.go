@@ -233,12 +233,22 @@ func getWikiDocsHandler(c *gin.Context) {
 		return
 	}
 
+	// 尝试获取知识库空间名称
+	spaceName := rootNode.Title // 默认使用节点标题作为备选
+	spaceInfo, err := client.GetWikiName(ctx, rootNode.SpaceID)
+	if err == nil && spaceInfo != "" {
+		spaceName = spaceInfo
+		fmt.Printf("获取到知识库空间名称: %s\n", spaceName)
+	} else {
+		fmt.Printf("获取知识库空间名称失败，使用节点标题作为备选: %s\n", spaceName)
+	}
+
 	// 添加调试日志
-	fmt.Printf("空间名称: %s, 节点Token: %s\n", rootNode.Title, rootNode.NodeToken)
+	fmt.Printf("空间名称: %s, 节点Token: %s\n", spaceName, rootNode.NodeToken)
 
 	// 创建根文档节点
 	docTree := &DocNode{
-		Title:    rootNode.Title,
+		Title:    spaceName,
 		URL:      fmt.Sprintf("https://feishu.cn/wiki/%s", rootNode.NodeToken),
 		Type:     "space",
 		Children: []*DocNode{},
@@ -305,10 +315,10 @@ func getWikiDocsHandler(c *gin.Context) {
 	}
 
 	// 保存树状结构文本到文件 - 使用空间名称作为文件名
-	spaceName := sanitizeFilename(rootNode.Title)
+	safeSpaceName := sanitizeFilename(spaceName)
 	// 添加调试日志
-	fmt.Printf("处理后的空间名称: %s\n", spaceName)
-	treeFilePath := filepath.Join(outputPath, spaceName+"_文档树.md")
+	fmt.Printf("处理后的空间名称: %s\n", safeSpaceName)
+	treeFilePath := filepath.Join(outputPath, safeSpaceName+"_文档树.md")
 	fmt.Printf("完整文件路径: %s\n", treeFilePath)
 	err = os.WriteFile(treeFilePath, []byte(treeText), 0644)
 	if err != nil {
