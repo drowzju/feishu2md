@@ -424,3 +424,257 @@ func generateTreeText(node *DocNode, level int) string {
 
 	return result.String()
 }
+
+// 获取知识库空间信息
+func getWikiSpaceInfoHandler(c *gin.Context) {
+	// 获取参数
+	wikiURL, err := url.QueryUnescape(c.Query("url"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "无效的知识库URL",
+		})
+		return
+	}
+
+	// 验证知识库URL
+	docType, spaceToken, err := utils.ValidateDocumentURL(wikiURL)
+	if err != nil || docType != "wiki" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "无效的知识库URL，请确保提供的是知识库设置链接",
+		})
+		return
+	}
+
+	// 创建客户端
+	ctx := context.Background()
+	config := core.NewConfig(
+		os.Getenv("FEISHU_APP_ID"),
+		os.Getenv("FEISHU_APP_SECRET"),
+	)
+	client := core.NewClient(
+		config.Feishu.AppId, config.Feishu.AppSecret,
+	)
+
+	// 获取知识库根节点
+	rootNode, err := client.GetWikiNodeInfo(ctx, spaceToken)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("获取知识库信息失败: %s", err),
+		})
+		return
+	}
+
+	// 尝试获取知识库空间名称
+	spaceName := rootNode.Title // 默认使用节点标题作为备选
+	spaceInfo, err := client.GetWikiName(ctx, rootNode.SpaceID)
+	if err == nil && spaceInfo != "" {
+		spaceName = spaceInfo
+	}
+
+	// 返回空间信息
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"space_info": gin.H{
+			"space_id":   rootNode.SpaceID,
+			"space_name": spaceName,
+			"node_token": rootNode.NodeToken,
+		},
+	})
+}
+
+// 获取知识库顶级节点列表
+func getWikiTopNodesHandler(c *gin.Context) {
+	// 获取参数
+	spaceID := c.Query("space_id")
+	if spaceID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "缺少space_id参数",
+		})
+		return
+	}
+
+	// 创建客户端
+	ctx := context.Background()
+	config := core.NewConfig(
+		os.Getenv("FEISHU_APP_ID"),
+		os.Getenv("FEISHU_APP_SECRET"),
+	)
+	client := core.NewClient(
+		config.Feishu.AppId, config.Feishu.AppSecret,
+	)
+
+	// 获取知识库中的顶级节点列表
+	topNodes, err := client.GetWikiNodeList(ctx, spaceID, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("获取知识库顶级节点失败: %s", err),
+		})
+		return
+	}
+
+	// 构建返回数据
+	var nodes []gin.H
+	for _, item := range topNodes {
+		nodeType := "folder"
+		nodeURL := fmt.Sprintf("https://feishu.cn/wiki/%s", item.NodeToken)
+		
+		if item.ObjType == "docx" || item.ObjType == "doc" {
+			nodeType = item.ObjType
+			nodeURL = fmt.Sprintf("https://feishu.cn/docx/%s", item.ObjToken)
+		}
+		
+		nodes = append(nodes, gin.H{
+			"title":      item.Title,
+			"node_token": item.NodeToken,
+			"obj_token":  item.ObjToken,
+			"obj_type":   item.ObjType,
+			"type":       nodeType,
+			"url":        nodeURL,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"nodes":   nodes,
+	})
+}
+
+// 获取知识库节点的子节点
+func getWikiNodeChildrenHandler(c *gin.Context) {
+	// 获取参数
+	nodeToken := c.Query("node_token")
+	if nodeToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "缺少node_token参数",
+		})
+		return
+	}
+
+	// 创建客户端
+	ctx := context.Background()
+	config := core.NewConfig(
+		os.Getenv("FEISHU_APP_ID"),
+		os.Getenv("FEISHU_APP_SECRET"),
+	)
+	client := core.NewClient(
+		config.Feishu.AppId, config.Feishu.AppSecret,
+	)
+
+	// 获取子节点，添加重试机制
+	var children []*core.WikiNode
+	var err error
+	maxRetries := 3
+
+	for i := 0; i < maxRetries; i++ {
+		children, err = client.GetWikiNodeChildren(ctx, nodeToken)
+		if err == nil {
+			break
+		}
+
+		if strings.Contains(err.Error(), "frequency limit") {
+			retryDelay := time.Duration(1<<uint(i)) * time.Second // 指数退避: 1s, 2s, 4s
+			log.Printf("触发限速，等待 %v 后重试 (%d/%d)...", retryDelay, i+1, maxRetries)
+			time.Sleep(retryDelay)
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("获取节点子节点失败: %s", err),
+			})
+			return
+		}
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("获取节点子节点失败，已重试 %d 次: %s", maxRetries, err),
+		})
+		return
+	}
+
+	// 构建返回数据
+	var nodes []gin.H
+	for _, child := range children {
+		nodeType := "folder"
+		nodeURL := fmt.Sprintf("https://feishu.cn/wiki/%s", child.NodeToken)
+		
+		if child.ObjType == "docx" || child.ObjType == "doc" {
+			nodeType = child.ObjType
+			nodeURL = fmt.Sprintf("https://feishu.cn/docx/%s", child.ObjToken)
+		}
+		
+		nodes = append(nodes, gin.H{
+			"title":      child.Title,
+			"node_token": child.NodeToken,
+			"obj_token":  child.ObjToken,
+			"obj_type":   child.ObjType,
+			"type":       nodeType,
+			"url":        nodeURL,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"nodes":   nodes,
+	})
+}
+
+// 生成并保存文档树文件
+func saveWikiTreeHandler(c *gin.Context) {
+	// 获取参数
+	var request struct {
+		OutputPath string    `json:"output_path"`
+		SpaceName  string    `json:"space_name"`
+		Tree       *DocNode  `json:"tree"`
+	}
+	
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "无效的请求参数",
+		})
+		return
+	}
+	
+	outputPath := request.OutputPath
+	if outputPath == "" {
+		outputPath = "output" // 默认输出路径
+	}
+
+	// 生成树状结构的文本文件
+	treeText := generateTreeText(request.Tree, 0)
+
+	// 确保输出目录存在
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("创建输出目录失败: %s", err),
+		})
+		return
+	}
+
+	// 保存树状结构文本到文件 - 使用空间名称作为文件名
+	safeSpaceName := sanitizeFilename(request.SpaceName)
+	treeFilePath := filepath.Join(outputPath, safeSpaceName+"_文档树.md")
+	err := os.WriteFile(treeFilePath, []byte(treeText), 0644)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("保存文档树文件失败: %s", err),
+		})
+		return
+	}
+
+	// 返回结果
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("成功生成文档树，已保存到 %s", treeFilePath),
+		"file_path": treeFilePath,
+	})
+}

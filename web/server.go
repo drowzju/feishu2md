@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,26 +22,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	// 创建路由
-	router := gin.Default()
-
-	// 配置CORS，允许Flutter应用访问
-	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
-		AllowMethods:     []string{"GET", "POST", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length", "Content-Disposition"},
-		AllowCredentials: true,
-	}))
-
-	// 注册API路由
-	router.GET("/download", downloadHandler)
-	router.GET("/wiki-docs", getWikiDocsHandler)
-
-	// 新增API：保存配置
-	router.POST("/config", saveConfigHandler)
-
-	// 新增API：获取配置
-	router.GET("/config", getConfigHandler)
+	router := setupRouter()
 
 	// 启动服务器
 	port := 8080
@@ -125,4 +105,36 @@ func getConfigHandler(c *gin.Context) {
 		"success": true,
 		"config":  config,
 	})
+}
+
+func setupRouter() *gin.Engine {
+	r := gin.Default()
+
+	// 设置CORS
+	r.Use(func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	})
+
+	// 现有路由
+	r.GET("/download", downloadHandler)
+	r.GET("/wiki-docs", getWikiDocsHandler)
+	r.GET("/config", getConfigHandler)
+	r.POST("/config", saveConfigHandler)
+
+	// 新增原子接口
+	r.GET("/wiki/space-info", getWikiSpaceInfoHandler)
+	r.GET("/wiki/top-nodes", getWikiTopNodesHandler)
+	r.GET("/wiki/node-children", getWikiNodeChildrenHandler)
+	r.POST("/wiki/save-tree", saveWikiTreeHandler)
+
+	return r
 }
