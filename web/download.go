@@ -579,8 +579,8 @@ func getWikiTopNodesHandler(c *gin.Context) {
 
 	// 创建客户端
 	ctx := context.Background()
-	// 添加超时控制
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// 增加超时时间到120秒
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	config := core.NewConfig(
@@ -596,65 +596,99 @@ func getWikiTopNodesHandler(c *gin.Context) {
 	// 获取知识库中的顶级节点列表，添加重试机制
 	var topNodes []*core.WikiNode
 	var err error
-	maxRetries := 3
+	maxRetries := 5           // 增加重试次数
+	var pageToken string = "" // 添加分页支持
 
-	for i := 0; i < maxRetries; i++ {
-		log.Printf("尝试获取顶级节点 (%d/%d)...", i+1, maxRetries)
+	// 记录所有分页的节点
+	allNodes := []*core.WikiNode{}
 
-		// 记录开始时间，用于计算耗时
-		startTime := time.Now()
+	// 分页获取所有节点
+	for {
+		// 尝试获取当前页的节点
+		pageSuccess := false
+		for i := 0; i < maxRetries; i++ {
+			log.Printf("尝试获取顶级节点 (页码标记: %s) (%d/%d)...", pageToken, i+1, maxRetries)
 
-		// 获取节点列表并转换类型
-		rawNodes, err := client.GetWikiNodeList(ctx, spaceID, nil)
-		if err == nil {
-			// 将 lark.GetWikiNodeListRespItem 转换为 core.WikiNode
-			topNodes = make([]*core.WikiNode, len(rawNodes))
-			for i, node := range rawNodes {
-				topNodes[i] = &core.WikiNode{
-					NodeToken: node.NodeToken,
-					ObjToken:  node.ObjToken,
-					ObjType:   node.ObjType,
-					Title:     node.Title,
-					SpaceID:   spaceID,
-				}
+			// 为每次请求创建新的上下文，避免使用已超时的上下文
+			reqCtx, reqCancel := context.WithTimeout(context.Background(), 60*time.Second)
+
+			// 记录开始时间，用于计算耗时
+			startTime := time.Now()
+
+			// 获取节点列表并转换类型
+			var rawNodes []*core.WikiNode
+			var nextPageToken string
+
+			// 使用分页参数
+			if pageToken == "" {
+				rawNodes, nextPageToken, err = client.GetWikiNodeListWithPagination(reqCtx, spaceID, nil)
+			} else {
+				rawNodes, nextPageToken, err = client.GetWikiNodeListWithPagination(reqCtx, spaceID, &pageToken)
+			}
+
+			reqCancel() // 请求完成后取消上下文
+
+			// 计算耗时
+			elapsed := time.Since(startTime)
+			log.Printf("获取顶级节点请求耗时: %v", elapsed)
+
+			if err == nil {
+				// 将当前页节点添加到总列表
+				allNodes = append(allNodes, rawNodes...)
+				log.Printf("成功获取顶级节点页，本页 %d 个节点，当前总计 %d 个节点", len(rawNodes), len(allNodes))
+
+				// 更新分页标记
+				pageToken = nextPageToken
+				pageSuccess = true
+				break
+			}
+
+			// 详细记录错误信息
+			log.Printf("获取顶级节点页失败 (%d/%d): %s", i+1, maxRetries, err)
+
+			if strings.Contains(err.Error(), "frequency limit") {
+				retryDelay := time.Duration(2<<uint(i)) * time.Second // 指数退避: 2s, 4s, 8s, 16s, 32s
+				log.Printf("触发限速，等待 %v 后重试...", retryDelay)
+				time.Sleep(retryDelay)
+			} else if strings.Contains(err.Error(), "context deadline exceeded") ||
+				strings.Contains(err.Error(), "timeout") {
+				// 超时错误增加等待时间再重试
+				retryDelay := time.Duration(5*(i+1)) * time.Second // 5s, 10s, 15s, 20s, 25s
+				log.Printf("请求超时，等待 %v 后重试...", retryDelay)
+				time.Sleep(retryDelay)
+			} else {
+				// 其他错误也尝试重试
+				retryDelay := time.Duration(3<<uint(i)) * time.Second
+				log.Printf("遇到错误，等待 %v 后重试...", retryDelay)
+				time.Sleep(retryDelay)
 			}
 		}
 
-		// 计算耗时
-		elapsed := time.Since(startTime)
-		log.Printf("获取顶级节点请求耗时: %v", elapsed)
+		// 如果当前页获取失败，返回错误
+		if !pageSuccess {
+			log.Printf("获取顶级节点页最终失败，已获取 %d 个节点", len(allNodes))
+			if len(allNodes) > 0 {
+				// 如果已经获取了一些节点，继续处理
+				log.Printf("尽管有错误，但已获取部分节点，将继续处理")
+				topNodes = allNodes
+				break
+			} else {
+				// 如果一个节点都没获取到，返回错误
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success":       false,
+					"message":       fmt.Sprintf("获取知识库顶级节点失败: %s", err),
+					"error_details": err.Error(),
+				})
+				return
+			}
+		}
 
-		if err == nil {
-			log.Printf("成功获取顶级节点，共 %d 个节点", len(topNodes))
+		// 如果没有下一页，结束循环
+		if pageToken == "" {
+			log.Printf("所有页面获取完成，共 %d 个节点", len(allNodes))
+			topNodes = allNodes
 			break
 		}
-
-		// 详细记录错误信息
-		log.Printf("获取顶级节点失败 (%d/%d): %s", i+1, maxRetries, err)
-
-		if strings.Contains(err.Error(), "frequency limit") {
-			retryDelay := time.Duration(1<<uint(i)) * time.Second // 指数退避: 1s, 2s, 4s
-			log.Printf("触发限速，等待 %v 后重试...", retryDelay)
-			time.Sleep(retryDelay)
-		} else if strings.Contains(err.Error(), "context deadline exceeded") {
-			log.Printf("请求超时，立即重试...")
-			// 超时错误立即重试
-		} else {
-			// 其他错误也尝试重试
-			retryDelay := time.Duration(1<<uint(i)) * time.Second
-			log.Printf("遇到错误，等待 %v 后重试...", retryDelay)
-			time.Sleep(retryDelay)
-		}
-	}
-
-	if err != nil {
-		log.Printf("获取顶级节点最终失败: %s", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success":       false,
-			"message":       fmt.Sprintf("获取知识库顶级节点失败: %s", err),
-			"error_details": err.Error(),
-		})
-		return
 	}
 
 	// 构建返回数据

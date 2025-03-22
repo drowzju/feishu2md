@@ -333,7 +333,7 @@ func (c *Client) GetAllWikiSpaces(ctx context.Context) ([]*WikiSpace, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	fmt.Printf("请求头: Authorization=Bearer %s..., Content-Type=%s\n", 
+	fmt.Printf("请求头: Authorization=Bearer %s..., Content-Type=%s\n",
 		token[:10], "application/json; charset=utf-8")
 
 	resp, err := c.httpClient.Do(req)
@@ -342,7 +342,7 @@ func (c *Client) GetAllWikiSpaces(ctx context.Context) ([]*WikiSpace, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	fmt.Printf("响应状态码: %d\n", resp.StatusCode)
 
 	// 解析响应
@@ -351,7 +351,7 @@ func (c *Client) GetAllWikiSpaces(ctx context.Context) ([]*WikiSpace, error) {
 		fmt.Printf("读取响应体失败: %v\n", err)
 		return nil, err
 	}
-	
+
 	// 打印完整的响应体
 	fmt.Printf("响应体: %s\n", string(body))
 
@@ -388,4 +388,82 @@ func (c *Client) GetAllWikiSpaces(ctx context.Context) ([]*WikiSpace, error) {
 
 	fmt.Printf("总共找到 %d 个空间\n", len(spaces))
 	return spaces, nil
+}
+
+// GetWikiNodeListWithPagination 获取知识库节点列表，支持分页
+func (c *Client) GetWikiNodeListWithPagination(ctx context.Context, spaceID string, pageToken *string) ([]*WikiNode, string, error) {
+	// 构建请求URL
+	apiURL := fmt.Sprintf("https://open.feishu.cn/open-apis/wiki/v2/spaces/%s/nodes", spaceID)
+
+	// 添加分页参数
+	if pageToken != nil && *pageToken != "" {
+		apiURL = fmt.Sprintf("%s?page_token=%s", apiURL, *pageToken)
+	}
+
+	// 创建请求
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// 添加认证头
+	token, err := c.GetTenantAccessToken(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	// 发送请求
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// 解析响应
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Items     []WikiNode `json:"items"`
+			PageToken string     `json:"page_token"`
+			HasMore   bool       `json:"has_more"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, "", err
+	}
+
+	// 检查错误
+	if result.Code != 0 {
+		return nil, "", fmt.Errorf("API错误: %d - %s", result.Code, result.Msg)
+	}
+
+	// 转换结果
+	nodes := make([]*WikiNode, len(result.Data.Items))
+	for i, item := range result.Data.Items {
+		nodes[i] = &WikiNode{
+			NodeToken: item.NodeToken,
+			ObjToken:  item.ObjToken,
+			ObjType:   item.ObjType,
+			Title:     item.Title,
+			SpaceID:   spaceID,
+		}
+	}
+
+	// 返回节点列表和下一页标记
+	nextPageToken := ""
+	if result.Data.HasMore {
+		nextPageToken = result.Data.PageToken
+	}
+
+	return nodes, nextPageToken, nil
 }
