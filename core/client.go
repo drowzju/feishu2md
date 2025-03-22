@@ -3,8 +3,10 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,6 +17,9 @@ import (
 
 type Client struct {
 	larkClient *lark.Lark
+	httpClient *http.Client // 添加 HTTP 客户端
+	appID      string       // 添加应用 ID
+	appSecret  string       // 添加应用密钥
 }
 
 func NewClient(appID, appSecret string) *Client {
@@ -24,6 +29,11 @@ func NewClient(appID, appSecret string) *Client {
 			lark.WithTimeout(60*time.Second),
 			lark.WithApiMiddleware(lark_rate_limiter.Wait(4, 4)),
 		),
+		httpClient: &http.Client{
+			Timeout: 60 * time.Second,
+		},
+		appID:     appID,
+		appSecret: appSecret,
 	}
 }
 
@@ -193,7 +203,7 @@ func (c *Client) GetWikiNodeChildren(ctx context.Context, nodeToken string) ([]*
 	if err != nil {
 		return nil, fmt.Errorf("获取节点信息失败: %w", err)
 	}
-	
+
 	// 使用正确的API调用获取子节点，提供 SpaceID
 	resp, _, err := c.larkClient.Drive.GetWikiNodeList(ctx, &lark.GetWikiNodeListReq{
 		SpaceID:         nodeInfo.Node.SpaceID,
@@ -239,4 +249,143 @@ func (c *Client) GetWikiNodeChildren(ctx context.Context, nodeToken string) ([]*
 	}
 
 	return nodes, nil
+}
+
+// WikiSpace 表示知识库空间信息
+type WikiSpace struct {
+	SpaceID string `json:"space_id"`
+	Name    string `json:"name"`
+}
+
+// GetTenantAccessToken 获取租户访问令牌
+func (c *Client) GetTenantAccessToken(ctx context.Context) (string, error) {
+	// 构建请求体
+	reqBody := map[string]string{
+		"app_id":     c.appID,
+		"app_secret": c.appSecret,
+	}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	// 发送请求
+	req, err := http.NewRequestWithContext(
+		ctx,
+		"POST",
+		"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	// 解析响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Code              int    `json:"code"`
+		Msg               string `json:"msg"`
+		TenantAccessToken string `json:"tenant_access_token"`
+		Expire            int    `json:"expire"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", err
+	}
+
+	if result.Code != 0 {
+		return "", fmt.Errorf("获取访问令牌失败: %s (代码: %d)", result.Msg, result.Code)
+	}
+
+	return result.TenantAccessToken, nil
+}
+
+// GetAllWikiSpaces 获取用户可访问的所有知识库空间
+func (c *Client) GetAllWikiSpaces(ctx context.Context) ([]*WikiSpace, error) {
+	// 获取访问令牌
+	token, err := c.GetTenantAccessToken(ctx)
+	if err != nil {
+		fmt.Printf("获取访问令牌失败: %v\n", err)
+		return nil, err
+	}
+	fmt.Printf("成功获取访问令牌: %s...\n", token[:10])
+
+	// 构建请求URL
+	url := "https://open.feishu.cn/open-apis/wiki/v2/spaces"
+	fmt.Printf("请求URL: %s\n", url)
+
+	// 发送请求
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		fmt.Printf("创建请求失败: %v\n", err)
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	fmt.Printf("请求头: Authorization=Bearer %s..., Content-Type=%s\n", 
+		token[:10], "application/json; charset=utf-8")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		fmt.Printf("发送请求失败: %v\n", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	fmt.Printf("响应状态码: %d\n", resp.StatusCode)
+
+	// 解析响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("读取响应体失败: %v\n", err)
+		return nil, err
+	}
+	
+	// 打印完整的响应体
+	fmt.Printf("响应体: %s\n", string(body))
+
+	var result struct {
+		Code int `json:"code"`
+		Data struct {
+			Items []struct {
+				SpaceID string `json:"space_id"`
+				Name    string `json:"name"`
+			} `json:"items"`
+		} `json:"data"`
+		Msg string `json:"msg"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		fmt.Printf("解析JSON失败: %v\n", err)
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		fmt.Printf("API返回错误: 代码=%d, 消息=%s\n", result.Code, result.Msg)
+		return nil, fmt.Errorf("API错误: %s (代码: %d)", result.Msg, result.Code)
+	}
+
+	// 构建返回结果
+	spaces := make([]*WikiSpace, 0, len(result.Data.Items))
+	for _, item := range result.Data.Items {
+		fmt.Printf("找到空间: ID=%s, 名称=%s\n", item.SpaceID, item.Name)
+		spaces = append(spaces, &WikiSpace{
+			SpaceID: item.SpaceID,
+			Name:    item.Name,
+		})
+	}
+
+	fmt.Printf("总共找到 %d 个空间\n", len(spaces))
+	return spaces, nil
 }

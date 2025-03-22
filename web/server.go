@@ -108,10 +108,10 @@ func getConfigHandler(c *gin.Context) {
 }
 
 func setupRouter() *gin.Engine {
-	r := gin.Default()
+	router := gin.New()
 
 	// 设置CORS
-	r.Use(func(c *gin.Context) {
+	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type")
@@ -124,17 +124,17 @@ func setupRouter() *gin.Engine {
 		c.Next()
 	})
 
-	// 现有路由
-	r.GET("/download", downloadHandler)
-	r.GET("/wiki-docs", getWikiDocsHandler)
-	r.GET("/config", getConfigHandler)
-	r.POST("/config", saveConfigHandler)
+	// 注册路由
+	router.GET("/download", downloadHandler)
+	router.GET("/config", getConfigHandler)
+	router.POST("/config", saveConfigHandler)
+	
+	// Wiki相关接口
+	router.GET("/wiki/space-info", getWikiSpaceInfoHandler)
+	router.GET("/wiki/top-nodes", getWikiTopNodesHandler)
+	router.GET("/wiki/node-children", getWikiNodeChildrenHandler)
+	router.POST("/wiki/save-tree", saveWikiTreeHandler)
+	router.GET("/wiki/spaces", getAllWikiSpacesHandler) // 获取所有空间列表的路由
 
-	// 新增原子接口
-	r.GET("/wiki/space-info", getWikiSpaceInfoHandler)
-	r.GET("/wiki/top-nodes", getWikiTopNodesHandler)
-	r.GET("/wiki/node-children", getWikiNodeChildrenHandler)
-	r.POST("/wiki/save-tree", saveWikiTreeHandler)
-
-	return r
+	return router
 }

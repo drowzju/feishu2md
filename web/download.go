@@ -10,8 +10,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp" // 添加正则表达式包
 	"strings"
-	"time" // 添加time包导入
+	"time"
 
 	"github.com/88250/lute"
 	"github.com/Wsine/feishu2md/core"
@@ -428,24 +429,10 @@ func generateTreeText(node *DocNode, level int) string {
 // 获取知识库空间信息
 func getWikiSpaceInfoHandler(c *gin.Context) {
 	// 获取参数
-	wikiURL, err := url.QueryUnescape(c.Query("url"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的知识库URL",
-		})
-		return
-	}
+	wikiURL := c.Query("url")
+	spaceID := c.Query("space_id")
 
-	// 验证知识库URL
-	docType, spaceToken, err := utils.ValidateDocumentURL(wikiURL)
-	if err != nil || docType != "wiki" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "无效的知识库URL，请确保提供的是知识库设置链接",
-		})
-		return
-	}
+	log.Printf("收到空间信息请求，URL: %s, SpaceID: %s", wikiURL, spaceID)
 
 	// 创建客户端
 	ctx := context.Background()
@@ -453,36 +440,127 @@ func getWikiSpaceInfoHandler(c *gin.Context) {
 		os.Getenv("FEISHU_APP_ID"),
 		os.Getenv("FEISHU_APP_SECRET"),
 	)
+	log.Printf("应用凭证: AppID=%s, AppSecret=%s", config.Feishu.AppId, "***")
+
 	client := core.NewClient(
 		config.Feishu.AppId, config.Feishu.AppSecret,
 	)
 
-	// 获取知识库根节点
-	rootNode, err := client.GetWikiNodeInfo(ctx, spaceToken)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+	// 根据不同参数获取空间信息
+	var spaceName string
+	var nodeToken string
+	var spaceIDToUse string
+
+	if spaceID != "" {
+		// 直接使用 space_id 参数
+		log.Printf("使用提供的 space_id: %s", spaceID)
+		spaceIDToUse = spaceID
+	} else if wikiURL != "" {
+		// 使用 URL 参数
+		var err error
+		wikiURL, err = url.QueryUnescape(wikiURL)
+		if err != nil {
+			log.Printf("URL解码失败: %s", err)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "无效的知识库URL",
+			})
+			return
+		}
+
+		// 检查是否是空间URL (形如 https://feishu.cn/wiki/space/7398737263215149060)
+		spaceURLPattern := regexp.MustCompile(`https://feishu\.cn/wiki/space/(\d+)`)
+		matches := spaceURLPattern.FindStringSubmatch(wikiURL)
+
+		if len(matches) > 1 {
+			// 从空间URL中提取space_id
+			spaceIDToUse = matches[1]
+			log.Printf("从URL中提取到space_id: %s", spaceIDToUse)
+		} else {
+			// 尝试作为普通知识库URL处理
+			docType, spaceToken, err := utils.ValidateDocumentURL(wikiURL)
+			if err != nil || docType != "wiki" {
+				log.Printf("URL验证失败: 类型=%s, Token=%s, 错误=%v", docType, spaceToken, err)
+				c.JSON(http.StatusBadRequest, gin.H{
+					"success": false,
+					"message": "无效的知识库URL，请确保提供的是知识库设置链接或空间链接",
+				})
+				return
+			}
+
+			log.Printf("URL验证成功: 类型=%s, Token=%s", docType, spaceToken)
+
+			// 获取知识库根节点
+			log.Printf("开始获取知识库根节点信息，Token: %s", spaceToken)
+			rootNode, err := client.GetWikiNodeInfo(ctx, spaceToken)
+			if err != nil {
+				log.Printf("获取知识库根节点失败: %s", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": fmt.Sprintf("获取知识库信息失败: %s", err),
+				})
+				return
+			}
+
+			log.Printf("获取知识库根节点成功: 标题=%s, SpaceID=%s, NodeToken=%s",
+				rootNode.Title, rootNode.SpaceID, rootNode.NodeToken)
+
+			// 设置相关信息
+			spaceIDToUse = rootNode.SpaceID
+			nodeToken = rootNode.NodeToken
+		}
+	} else {
+		// 两个参数都没有提供
+		log.Printf("未提供 space_id 或 url 参数")
+		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": fmt.Sprintf("获取知识库信息失败: %s", err),
+			"message": "请提供 space_id 或 url 参数",
 		})
 		return
 	}
 
-	// 尝试获取知识库空间名称
-	spaceName := rootNode.Title // 默认使用节点标题作为备选
-	spaceInfo, err := client.GetWikiName(ctx, rootNode.SpaceID)
-	if err == nil && spaceInfo != "" {
-		spaceName = spaceInfo
+	// 使用space_id获取空间信息
+	if spaceIDToUse != "" {
+		// 获取空间名称
+		var err error
+		spaceName, err = client.GetWikiName(ctx, spaceIDToUse)
+		if err != nil {
+			log.Printf("通过 space_id 获取空间名称失败: %s", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("获取知识库空间名称失败: %s", err),
+			})
+			return
+		}
+		log.Printf("通过 space_id 获取空间名称成功: %s", spaceName)
+
+		// 如果没有节点token，获取空间的顶级节点作为入口节点
+		if nodeToken == "" {
+			topNodes, err := client.GetWikiNodeList(ctx, spaceIDToUse, nil)
+			if err != nil || len(topNodes) == 0 {
+				log.Printf("获取空间顶级节点失败或空间没有节点: %v", err)
+				// 没有节点时，仍然返回空间信息，但没有节点token
+				nodeToken = ""
+			} else {
+				// 使用第一个顶级节点的token
+				nodeToken = topNodes[0].NodeToken
+				log.Printf("获取到空间的第一个顶级节点: %s, token: %s", topNodes[0].Title, nodeToken)
+			}
+		}
 	}
 
 	// 返回空间信息
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"success": true,
 		"space_info": gin.H{
-			"space_id":   rootNode.SpaceID,
+			"space_id":   spaceIDToUse,
 			"space_name": spaceName,
-			"node_token": rootNode.NodeToken,
+			"node_token": nodeToken,
 		},
-	})
+	}
+	log.Printf("返回空间信息: %+v", response)
+
+	c.JSON(http.StatusOK, response)
 }
 
 // 获取知识库顶级节点列表
@@ -497,37 +575,101 @@ func getWikiTopNodesHandler(c *gin.Context) {
 		return
 	}
 
+	log.Printf("开始获取知识库顶级节点，SpaceID: %s", spaceID)
+
 	// 创建客户端
 	ctx := context.Background()
+	// 添加超时控制
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	config := core.NewConfig(
 		os.Getenv("FEISHU_APP_ID"),
 		os.Getenv("FEISHU_APP_SECRET"),
 	)
+	log.Printf("应用凭证: AppID=%s", config.Feishu.AppId)
+
 	client := core.NewClient(
 		config.Feishu.AppId, config.Feishu.AppSecret,
 	)
 
-	// 获取知识库中的顶级节点列表
-	topNodes, err := client.GetWikiNodeList(ctx, spaceID, nil)
+	// 获取知识库中的顶级节点列表，添加重试机制
+	var topNodes []*core.WikiNode
+	var err error
+	maxRetries := 3
+
+	for i := 0; i < maxRetries; i++ {
+		log.Printf("尝试获取顶级节点 (%d/%d)...", i+1, maxRetries)
+
+		// 记录开始时间，用于计算耗时
+		startTime := time.Now()
+
+		// 获取节点列表并转换类型
+		rawNodes, err := client.GetWikiNodeList(ctx, spaceID, nil)
+		if err == nil {
+			// 将 lark.GetWikiNodeListRespItem 转换为 core.WikiNode
+			topNodes = make([]*core.WikiNode, len(rawNodes))
+			for i, node := range rawNodes {
+				topNodes[i] = &core.WikiNode{
+					NodeToken: node.NodeToken,
+					ObjToken:  node.ObjToken,
+					ObjType:   node.ObjType,
+					Title:     node.Title,
+					SpaceID:   spaceID,
+				}
+			}
+		}
+
+		// 计算耗时
+		elapsed := time.Since(startTime)
+		log.Printf("获取顶级节点请求耗时: %v", elapsed)
+
+		if err == nil {
+			log.Printf("成功获取顶级节点，共 %d 个节点", len(topNodes))
+			break
+		}
+
+		// 详细记录错误信息
+		log.Printf("获取顶级节点失败 (%d/%d): %s", i+1, maxRetries, err)
+
+		if strings.Contains(err.Error(), "frequency limit") {
+			retryDelay := time.Duration(1<<uint(i)) * time.Second // 指数退避: 1s, 2s, 4s
+			log.Printf("触发限速，等待 %v 后重试...", retryDelay)
+			time.Sleep(retryDelay)
+		} else if strings.Contains(err.Error(), "context deadline exceeded") {
+			log.Printf("请求超时，立即重试...")
+			// 超时错误立即重试
+		} else {
+			// 其他错误也尝试重试
+			retryDelay := time.Duration(1<<uint(i)) * time.Second
+			log.Printf("遇到错误，等待 %v 后重试...", retryDelay)
+			time.Sleep(retryDelay)
+		}
+	}
+
 	if err != nil {
+		log.Printf("获取顶级节点最终失败: %s", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": fmt.Sprintf("获取知识库顶级节点失败: %s", err),
+			"success":       false,
+			"message":       fmt.Sprintf("获取知识库顶级节点失败: %s", err),
+			"error_details": err.Error(),
 		})
 		return
 	}
 
 	// 构建返回数据
 	var nodes []gin.H
-	for _, item := range topNodes {
+	for i, item := range topNodes {
 		nodeType := "folder"
 		nodeURL := fmt.Sprintf("https://feishu.cn/wiki/%s", item.NodeToken)
-		
+
 		if item.ObjType == "docx" || item.ObjType == "doc" {
 			nodeType = item.ObjType
 			nodeURL = fmt.Sprintf("https://feishu.cn/docx/%s", item.ObjToken)
 		}
-		
+
+		log.Printf("顶级节点 %d: 标题=%s, 类型=%s", i+1, item.Title, nodeType)
+
 		nodes = append(nodes, gin.H{
 			"title":      item.Title,
 			"node_token": item.NodeToken,
@@ -538,6 +680,7 @@ func getWikiTopNodesHandler(c *gin.Context) {
 		})
 	}
 
+	log.Printf("返回顶级节点列表，共 %d 个节点", len(nodes))
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"nodes":   nodes,
@@ -603,12 +746,12 @@ func getWikiNodeChildrenHandler(c *gin.Context) {
 	for _, child := range children {
 		nodeType := "folder"
 		nodeURL := fmt.Sprintf("https://feishu.cn/wiki/%s", child.NodeToken)
-		
+
 		if child.ObjType == "docx" || child.ObjType == "doc" {
 			nodeType = child.ObjType
 			nodeURL = fmt.Sprintf("https://feishu.cn/docx/%s", child.ObjToken)
 		}
-		
+
 		nodes = append(nodes, gin.H{
 			"title":      child.Title,
 			"node_token": child.NodeToken,
@@ -629,11 +772,11 @@ func getWikiNodeChildrenHandler(c *gin.Context) {
 func saveWikiTreeHandler(c *gin.Context) {
 	// 获取参数
 	var request struct {
-		OutputPath string    `json:"output_path"`
-		SpaceName  string    `json:"space_name"`
-		Tree       *DocNode  `json:"tree"`
+		OutputPath string   `json:"output_path"`
+		SpaceName  string   `json:"space_name"`
+		Tree       *DocNode `json:"tree"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -641,7 +784,7 @@ func saveWikiTreeHandler(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	outputPath := request.OutputPath
 	if outputPath == "" {
 		outputPath = "output" // 默认输出路径
@@ -673,8 +816,56 @@ func saveWikiTreeHandler(c *gin.Context) {
 
 	// 返回结果
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": fmt.Sprintf("成功生成文档树，已保存到 %s", treeFilePath),
+		"success":   true,
+		"message":   fmt.Sprintf("成功生成文档树，已保存到 %s", treeFilePath),
 		"file_path": treeFilePath,
+	})
+}
+
+// 获取所有知识库空间列表
+func getAllWikiSpacesHandler(c *gin.Context) {
+	log.Printf("收到获取所有空间列表的请求")
+
+	// 创建客户端
+	ctx := context.Background()
+	config := core.NewConfig(
+		os.Getenv("FEISHU_APP_ID"),
+		os.Getenv("FEISHU_APP_SECRET"),
+	)
+	log.Printf("应用凭证: AppID=%s, AppSecret=%s", config.Feishu.AppId, "***")
+
+	client := core.NewClient(
+		config.Feishu.AppId, config.Feishu.AppSecret,
+	)
+
+	// 获取所有知识库空间列表
+	log.Printf("开始获取所有知识库空间列表...")
+	spaces, err := client.GetAllWikiSpaces(ctx)
+	if err != nil {
+		log.Printf("获取知识库空间列表失败: %s", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("获取知识库空间列表失败: %s", err),
+		})
+		return
+	}
+
+	log.Printf("成功获取到 %d 个知识库空间", len(spaces))
+
+	// 构建返回数据
+	var spacesList []gin.H
+	for i, space := range spaces {
+		log.Printf("空间 %d: ID=%s, 名称=%s", i+1, space.SpaceID, space.Name)
+		spacesList = append(spacesList, gin.H{
+			"space_id":   space.SpaceID,
+			"space_name": space.Name,
+			"url":        fmt.Sprintf("https://feishu.cn/wiki/space/%s", space.SpaceID),
+		})
+	}
+
+	log.Printf("返回空间列表数据，共 %d 个空间", len(spacesList))
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"spaces":  spacesList,
 	})
 }

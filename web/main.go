@@ -27,7 +27,7 @@ func main() {
 		c.HTML(http.StatusOK, "index.templ.html", nil)
 	})
 	router.GET("/download", downloadHandler)
-	router.GET("/wiki-docs", getWikiDocsHandler) // 添加新的路由
+	router.GET("/wiki/spaces", getAllWikiSpacesHandler) // 添加新的路由
 
 	if err := router.Run(); err != nil {
 		log.Panicf("error: %s", err)
