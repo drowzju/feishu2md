@@ -187,10 +187,10 @@ func (c *Client) GetWikiNodeList(ctx context.Context, spaceID string, parentNode
 
 // WikiNode 定义知识库节点结构
 type WikiNode struct {
-	NodeToken string
-	ObjToken  string
-	ObjType   string
-	Title     string
+	NodeToken string `json:"node_token"`
+	ObjToken  string `json:"obj_token"`
+	ObjType   string `json:"obj_type"`
+	Title     string `json:"title"`
 	SpaceID   string // 添加SpaceID字段
 }
 
@@ -427,14 +427,22 @@ func (c *Client) GetWikiNodeListWithPagination(ctx context.Context, spaceID stri
 		return nil, "", err
 	}
 
+	// 打印响应体，帮助调试
+	fmt.Printf("API响应: %s\n", string(body))
+
 	// 解析响应
 	var result struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 		Data struct {
-			Items     []WikiNode `json:"items"`
-			PageToken string     `json:"page_token"`
-			HasMore   bool       `json:"has_more"`
+			Items []struct {
+				NodeToken string `json:"node_token"`
+				ObjToken  string `json:"obj_token"`
+				ObjType   string `json:"obj_type"`
+				Title     string `json:"title"`
+			} `json:"items"`
+			PageToken string `json:"page_token"`
+			HasMore   bool   `json:"has_more"`
 		} `json:"data"`
 	}
 
@@ -457,6 +465,9 @@ func (c *Client) GetWikiNodeListWithPagination(ctx context.Context, spaceID stri
 			Title:     item.Title,
 			SpaceID:   spaceID,
 		}
+		// 打印每个节点的信息，帮助调试
+		fmt.Printf("节点 %d: 标题=%s, NodeToken=%s, ObjToken=%s, ObjType=%s\n",
+			i+1, item.Title, item.NodeToken, item.ObjToken, item.ObjType)
 	}
 
 	// 返回节点列表和下一页标记
