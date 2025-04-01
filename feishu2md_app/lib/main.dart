@@ -331,6 +331,66 @@ class _HomePageState extends State<HomePage> {
     // 打印节点详细信息，帮助调试
     print('节点详情: ${json.encode(node)}');
     
+    // 如果是文档类型，尝试下载文档内容
+    if (node['type'] == 'docx' || node['type'] == 'doc') {
+      try {
+        // 获取文档的obj_token
+        final objToken = node['obj_token'];
+        if (objToken != null && objToken.isNotEmpty) {
+          print('尝试下载文档: ${node['title']}, objToken: $objToken');
+          
+          // 构建下载路径
+          final docPath = _currentPath.join('/');
+          
+          // 确保输出路径是绝对路径
+          String outputDir = _outputPathController.text;
+          if (Platform.isWindows && !outputDir.contains(':\\')) {
+            // 如果是Windows系统且不是绝对路径，转换为绝对路径
+            final currentDir = Directory.current.path;
+            outputDir = path.join(currentDir, outputDir);
+          }
+          
+          print('使用输出目录: $outputDir');
+          
+          // 调用下载接口，确保所有参数都正确编码
+          final downloadUrl = 'http://localhost:8080/download?token=${Uri.encodeComponent(objToken)}'
+              '&type=${Uri.encodeComponent(node['type'])}'
+              '&output_path=${Uri.encodeComponent(outputDir)}'
+              '&path=${Uri.encodeComponent(docPath)}';
+          
+          print('下载URL: $downloadUrl');
+          
+          setState(() {
+            _statusMessage = '正在下载文档: ${_currentPath.join(" > ")}';
+          });
+          
+          // 使用更长的超时时间
+          final client = http.Client();
+          try {
+            final downloadResponse = await client.get(
+              Uri.parse(downloadUrl),
+              headers: {'Connection': 'keep-alive'},
+            ).timeout(const Duration(minutes: 2)); // 增加超时时间
+            
+            if (downloadResponse.statusCode == 200) {
+              final downloadData = json.decode(downloadResponse.body);
+              if (downloadData['success'] == true) {
+                print('文档下载成功: ${node['title']} -> ${downloadData['file_path']}');
+              } else {
+                print('文档下载失败: ${downloadData['message']}');
+              }
+            } else {
+              print('文档下载请求失败: ${downloadResponse.statusCode}, 响应内容: ${downloadResponse.body}');
+            }
+          } finally {
+            client.close();
+          }
+        }
+      } catch (e) {
+        print('下载文档时出错: $e');
+      }
+    }
+    
     // 确保有node_token
     final nodeToken = node['node_token'];
     if (nodeToken == null || nodeToken.isEmpty) {

@@ -10,11 +10,33 @@ endif
 
 .PHONY: test
 test:
-	go test ./...
+	go test ./core/... ./web/...
 
 .PHONY: server
 server:
-	go build -o ./feishu2md4web web/*.go
+	go build -o ./feishu2md-server web/*.go
+
+.PHONY: flutter
+flutter:
+	cd feishu2md_app && flutter build windows
+
+.PHONY: flutter-web
+flutter-web:
+	cd feishu2md_app && flutter build web
+
+.PHONY: all-in-one
+all-in-one: server flutter
+	@echo "构建完整应用程序"
+	mkdir -p ./dist
+	cp ./feishu2md-server ./dist/
+	cp -r ./feishu2md_app/build/windows/runner/Release/* ./dist/
+
+.PHONY: web-app
+web-app: server flutter-web
+	@echo "构建Web应用程序"
+	mkdir -p ./dist/web
+	cp ./feishu2md-server ./dist/
+	cp -r ./feishu2md_app/build/web/* ./dist/web/
 
 .PHONY: image
 image:
@@ -25,8 +47,9 @@ docker:
 	docker run -it --rm -p 8080:8080 feishu2md
 
 .PHONY: clean
-clean:  ## Clean build bundles
-	rm -f ./feishu2md ./feishu2md4web
+clean:  ## 清理构建产物
+	rm -f ./feishu2md ./feishu2md-server
+	rm -rf ./dist
 
 .PHONY: format
 format:
@@ -34,4 +57,4 @@ format:
 
 .PHONY: all
 all: build server
-	@echo "Build all done"
+	@echo "构建完成"
