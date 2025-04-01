@@ -2,7 +2,7 @@
 ## 后端服务
 
 cd d:\code\feishu2md-main
-go build -o feishu2md-server.exe .\web\server.go
+go build -o feishu2md-server.exe .\web\
 .\feishu2md-server.exe
 
 

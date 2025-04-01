@@ -34,8 +34,40 @@ func downloadHandler(c *gin.Context) {
 		outputPath = "output" // 默认输出路径
 	}
 
-	// Validate the url to download
-	docType, docToken, err := utils.ValidateDocumentURL(feishu_docx_url)
+	// 获取直接传递的token和type参数
+	directToken := c.Query("token")
+	directType := c.Query("type")
+
+	// 记录请求参数
+	log.Printf("下载请求参数: URL=%s, 输出路径=%s, 直接Token=%s, 直接类型=%s",
+		feishu_docx_url, outputPath, directToken, directType)
+
+	// 根据不同参数来源确定文档token和类型
+	var docType, docToken string
+
+	if directToken != "" {
+		// 优先使用直接传递的token和type
+		docToken = directToken
+		docType = directType
+		if docType == "" {
+			docType = "docx" // 默认类型
+		}
+		log.Printf("使用直接传递的参数: token=%s, type=%s", docToken, docType)
+	} else {
+		// 从URL解析token和type
+		var err error
+		docType, docToken, err = utils.ValidateDocumentURL(feishu_docx_url)
+		if err != nil {
+			log.Printf("URL验证失败: %s", err)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("无效的文档URL: %s", err),
+			})
+			return
+		}
+		log.Printf("从URL解析的参数: token=%s, type=%s", docToken, docType)
+	}
+
 	fmt.Println("Captured document token:", docToken)
 
 	// Create client with context
@@ -45,12 +77,18 @@ func downloadHandler(c *gin.Context) {
 		os.Getenv("FEISHU_APP_SECRET"),
 	)
 
+	log.Printf("应用凭证: AppID=%s", config.Feishu.AppId)
+
 	// 更新配置中的输出路径
 	config.Output.ImageDir = filepath.Join(outputPath, "images")
 
 	// 确保输出目录存在
 	if err := os.MkdirAll(config.Output.ImageDir, 0755); err != nil {
-		c.String(http.StatusInternalServerError, fmt.Sprintf("创建输出目录失败: %s", err))
+		log.Printf("创建输出目录失败: %s", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("创建输出目录失败: %s", err),
+		})
 		return
 	}
 
@@ -64,26 +102,60 @@ func downloadHandler(c *gin.Context) {
 
 	// for a wiki page, we need to renew docType and docToken first
 	if docType == "wiki" {
+		log.Printf("处理wiki类型文档，获取节点信息: token=%s", docToken)
 		node, err := client.GetWikiNodeInfo(ctx, docToken)
 		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal error: client.GetWikiNodeInfo")
-			log.Panicf("error: %s", err)
+			log.Printf("获取知识库节点信息失败: %s", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("获取知识库节点信息失败: %s", err),
+			})
 			return
 		}
+		log.Printf("获取到节点信息: 标题=%s, 对象类型=%s, 对象Token=%s",
+			node.Title, node.ObjType, node.ObjToken)
 		docType = node.ObjType
 		docToken = node.ObjToken
 	}
+
 	if docType == "docs" {
-		c.String(http.StatusBadRequest, "Unsupported docs document type")
+		log.Printf("不支持的文档类型: docs")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "不支持的文档类型: docs",
+		})
 		return
 	}
 
+	// 获取文档内容
+	log.Printf("开始获取文档内容: token=%s, type=%s", docToken, docType)
 	docx, blocks, err := client.GetDocxContent(ctx, docToken)
+
+	// 这里是原来出错的地方，改进错误处理
 	if err != nil {
-		c.String(http.StatusInternalServerError, "Internal error: client.GetDocxContent")
-		log.Panicf("error: %s", err)
+		// 记录详细错误信息
+		log.Printf("获取文档内容失败: %s", err)
+
+		// 检查是否是404错误
+		if strings.Contains(err.Error(), "404") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "文档不存在或无权访问",
+				"error":   err.Error(),
+			})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "获取文档内容失败",
+				"error":   err.Error(),
+			})
+		}
 		return
 	}
+
+	// 记录文档基本信息
+	log.Printf("成功获取文档内容: 标题=%s, 块数量=%d", docx.Title, len(blocks))
+
 	markdown = parser.ParseDocxContent(docx, blocks)
 
 	// 获取文档标题并处理为合法文件名
@@ -94,27 +166,60 @@ func downloadHandler(c *gin.Context) {
 	// 替换文件名中的非法字符
 	docTitle = sanitizeFilename(docTitle)
 
-	zipBuffer := new(bytes.Buffer)
-	writer := zip.NewWriter(zipBuffer)
-	for _, imgToken := range parser.ImgTokens {
-		localLink, rawImage, err := client.DownloadImageRaw(ctx, imgToken, config.Output.ImageDir)
+	// 获取自定义路径参数
+	customPath := c.Query("path")
+	log.Printf("自定义路径参数: %s", customPath)
+
+	// 如果提供了自定义路径，创建对应的目录结构
+	if customPath != "" {
+		// 解码路径
+		decodedPath, err := url.QueryUnescape(customPath)
 		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal error: client.DownloadImageRaw")
-			log.Panicf("error: %s", err)
+			log.Printf("路径解码失败: %s", err)
+			decodedPath = customPath
+		}
+
+		// 构建完整输出路径
+		fullOutputPath := filepath.Join(outputPath, decodedPath)
+		log.Printf("使用自定义路径: %s", fullOutputPath)
+
+		// 创建目录
+		if err := os.MkdirAll(fullOutputPath, 0755); err != nil {
+			log.Printf("创建自定义路径目录失败: %s", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("创建自定义路径目录失败: %s", err),
+			})
 			return
 		}
+
+		// 更新文件保存路径
+		outputPath = fullOutputPath
+	}
+
+	// 处理图片
+	log.Printf("开始处理文档中的图片，共 %d 个", len(parser.ImgTokens))
+	zipBuffer := new(bytes.Buffer)
+	writer := zip.NewWriter(zipBuffer)
+	for i, imgToken := range parser.ImgTokens {
+		log.Printf("处理图片 %d/%d: token=%s", i+1, len(parser.ImgTokens), imgToken)
+		localLink, rawImage, err := client.DownloadImageRaw(ctx, imgToken, config.Output.ImageDir)
+		if err != nil {
+			log.Printf("下载图片失败: %s", err)
+			// 继续处理其他图片，而不是中断整个过程
+			continue
+		}
+		log.Printf("图片下载成功: %s", localLink)
 		markdown = strings.Replace(markdown, imgToken, localLink, 1)
 		f, err := writer.Create(localLink)
 		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal error: zipWriter.Create")
-			log.Panicf("error: %s", err)
-			return
+			log.Printf("创建ZIP文件条目失败: %s", err)
+			continue
 		}
 		_, err = f.Write(rawImage)
 		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal error: zipWriter.Create.Write")
-			log.Panicf("error: %s", err)
-			return
+			log.Printf("写入图片数据失败: %s", err)
+			continue
 		}
 	}
 
@@ -123,34 +228,27 @@ func downloadHandler(c *gin.Context) {
 	})
 	result := engine.FormatStr("md", markdown)
 
-	// Set response
-	if len(parser.ImgTokens) > 0 {
-		mdName := fmt.Sprintf("%s.md", docTitle)
-		f, err := writer.Create(mdName)
-		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal error: zipWriter.Create")
-			log.Panicf("error: %s", err)
-			return
-		}
-		_, err = f.Write([]byte(result))
-		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal error: zipWriter.Create.Write")
-			log.Panicf("error: %s", err)
-			return
-		}
-
-		err = writer.Close()
-		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal error: zipWriter.Close")
-			log.Panicf("error: %s", err)
-			return
-		}
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, docTitle))
-		c.Data(http.StatusOK, "application/octet-stream", zipBuffer.Bytes())
-	} else {
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.md"`, docTitle))
-		c.Data(http.StatusOK, "application/octet-stream", []byte(result))
+	// 保存Markdown文件到本地
+	mdFilePath := filepath.Join(outputPath, docTitle+".md")
+	log.Printf("保存Markdown文件到: %s", mdFilePath)
+	err = os.WriteFile(mdFilePath, []byte(result), 0644)
+	if err != nil {
+		log.Printf("保存Markdown文件失败: %s", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("保存Markdown文件失败: %s", err),
+		})
+		return
 	}
+
+	log.Printf("文档下载和保存成功: %s", mdFilePath)
+
+	// 返回成功响应
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"message":   "文档下载成功",
+		"file_path": mdFilePath,
+	})
 }
 
 // 处理文件名中的非法字符

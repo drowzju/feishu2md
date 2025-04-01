@@ -575,161 +575,362 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('飞书文档下载器'),
+        backgroundColor: Colors.blue.shade700,
+        elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 获取空间列表按钮
-            ElevatedButton(
-              onPressed: _isLoading ? null : _fetchAllWikiSpaces,
-              child: const Text('获取所有空间列表'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                backgroundColor: Colors.blue,
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // 空间选择下拉列表
-            if (_spacesList.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(4),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.blue.shade50, Colors.white],
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 功能区卡片
+                Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '空间选择',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // 获取空间列表按钮
+                        ElevatedButton.icon(
+                          onPressed: _isLoading ? null : _fetchAllWikiSpaces,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('获取所有空间列表'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                            backgroundColor: Colors.blue.shade600,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                        
+                        const SizedBox(height: 16),
+                        
+                        // 空间选择下拉列表
+                        if (_spacesList.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(8),
+                              color: Colors.white,
+                            ),
+                            child: DropdownButton<Map<String, dynamic>>(
+                              isExpanded: true,
+                              underline: Container(), // 移除下划线
+                              value: _selectedSpace,
+                              hint: const Text('选择空间'),
+                              onChanged: (Map<String, dynamic>? newValue) {
+                                setState(() {
+                                  _selectedSpace = newValue;
+                                  if (newValue != null) {
+                                    _spaceUrlController.text = newValue['url'];
+                                  }
+                                });
+                              },
+                              items: _spacesList.map<DropdownMenuItem<Map<String, dynamic>>>((Map<String, dynamic> space) {
+                                return DropdownMenuItem<Map<String, dynamic>>(
+                                  value: space,
+                                  child: Text(space['space_name']),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                        
+                        const SizedBox(height: 16),
+                        
+                        // 空间地址输入框
+                        TextField(
+                          controller: _spaceUrlController,
+                          decoration: InputDecoration(
+                            labelText: '飞书空间地址',
+                            hintText: '输入飞书空间地址，用于递归获取所有文档',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            filled: true,
+                            fillColor: Colors.white,
+                            prefixIcon: const Icon(Icons.link),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                child: DropdownButton<Map<String, dynamic>>(
-                  isExpanded: true,
-                  underline: Container(), // 移除下划线
-                  value: _selectedSpace,
-                  hint: const Text('选择空间'),
-                  onChanged: (Map<String, dynamic>? newValue) {
-                    setState(() {
-                      _selectedSpace = newValue;
-                      if (newValue != null) {
-                        _spaceUrlController.text = newValue['url'];
-                      }
-                    });
-                  },
-                  items: _spacesList.map<DropdownMenuItem<Map<String, dynamic>>>((Map<String, dynamic> space) {
-                    return DropdownMenuItem<Map<String, dynamic>>(
-                      value: space,
-                      child: Text(space['space_name']),
-                    );
-                  }).toList(),
+                
+                const SizedBox(height: 16),
+                
+                // 操作区卡片
+                Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '下载操作',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // 获取空间文档按钮
+                        ElevatedButton.icon(
+                          onPressed: _isLoading ? null : _fetchSpaceDocumentsWithAtomicApis,
+                          icon: const Icon(Icons.download),
+                          label: const Text('获取空间所有文档'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            backgroundColor: Colors.green.shade600,
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(double.infinity, 48),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                        
+                        const SizedBox(height: 16),
+                        
+                        // 显示进度条
+                        if (_showProgress)
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    '下载进度',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blue.shade700,
+                                    ),
+                                  ),
+                                  Text(
+                                    '${(_progress * 100).toStringAsFixed(1)}%',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blue.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: LinearProgressIndicator(
+                                  value: _progress,
+                                  minHeight: 8,
+                                  backgroundColor: Colors.grey.shade200,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    _progress < 0.3 
+                                        ? Colors.red 
+                                        : (_progress < 0.7 ? Colors.orange : Colors.green),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.grey.shade300),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '状态信息',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                        color: Colors.grey.shade700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      _statusMessage,
+                                      style: const TextStyle(fontSize: 13),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            
-            const SizedBox(height: 16),
-            
-            // 空间地址输入框
-            TextField(
-              controller: _spaceUrlController,
-              decoration: const InputDecoration(
-                labelText: '飞书空间地址',
-                hintText: '输入飞书空间地址，用于递归获取所有文档',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // 获取空间文档按钮
-            ElevatedButton(
-              onPressed: _isLoading ? null : _fetchSpaceDocumentsWithAtomicApis,
-              child: const Text('获取空间所有文档'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                backgroundColor: Colors.green,
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            // 显示进度条
-            if (_showProgress)
-              Column(
-                children: [
-                  LinearProgressIndicator(value: _progress),
-                  const SizedBox(height: 8),
-                  Text('进度: ${(_progress * 100).toStringAsFixed(1)}%'),
-                  const SizedBox(height: 4),
+                
+                const SizedBox(height: 16),
+                
+                // 配置区卡片
+                Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ExpansionTile(
+                    title: const Text(
+                      '应用配置',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    leading: const Icon(Icons.settings),
+                    childrenPadding: const EdgeInsets.all(16),
+                    children: [
+                      TextField(
+                        controller: _appIdController,
+                        decoration: InputDecoration(
+                          labelText: 'App ID',
+                          hintText: '输入飞书App ID',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          filled: true,
+                          fillColor: Colors.white,
+                          prefixIcon: const Icon(Icons.app_registration),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _appSecretController,
+                        decoration: InputDecoration(
+                          labelText: 'App Secret',
+                          hintText: '输入飞书App Secret',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          filled: true,
+                          fillColor: Colors.white,
+                          prefixIcon: const Icon(Icons.security),
+                        ),
+                        obscureText: true,
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _outputPathController,
+                              decoration: InputDecoration(
+                                labelText: '输出路径',
+                                hintText: '选择文档保存位置',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                filled: true,
+                                fillColor: Colors.white,
+                                prefixIcon: const Icon(Icons.folder),
+                              ),
+                              readOnly: true,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.folder_open),
+                            label: const Text('浏览'),
+                            onPressed: _selectOutputPath,
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        onPressed: _saveConfig,
+                        icon: const Icon(Icons.save),
+                        label: const Text('保存配置'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          backgroundColor: Colors.blue.shade600,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(double.infinity, 48),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                const SizedBox(height: 16),
+                
+                // 状态信息区
+                if (_isLoading && !_showProgress)
+                  const Center(
+                    child: Column(
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 8),
+                        Text('处理中，请稍候...'),
+                      ],
+                    ),
+                  )
+                else if (_statusMessage.isNotEmpty && !_showProgress)
                   Container(
-                    padding: const EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(4),
+                      color: _statusMessage.contains('失败') 
+                          ? Colors.red.shade50 
+                          : Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _statusMessage.contains('失败') 
+                            ? Colors.red.shade200 
+                            : Colors.green.shade200,
+                      ),
                     ),
                     child: Text(
                       _statusMessage,
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
-            const SizedBox(height: 8),
-            ExpansionTile(
-              title: const Text('配置'),
-              children: [
-                TextField(
-                  controller: _appIdController,
-                  decoration: const InputDecoration(
-                    labelText: 'App ID',
-                    hintText: '输入飞书App ID',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _appSecretController,
-                  decoration: const InputDecoration(
-                    labelText: 'App Secret',
-                    hintText: '输入飞书App Secret',
-                    border: OutlineInputBorder(),
-                  ),
-                  obscureText: true,
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _outputPathController,
-                        decoration: const InputDecoration(
-                          labelText: '输出路径',
-                          hintText: '选择文档保存位置',
-                          border: OutlineInputBorder(),
-                        ),
-                        readOnly: true,
+                      style: TextStyle(
+                        color: _statusMessage.contains('失败') 
+                            ? Colors.red.shade700 
+                            : Colors.green.shade700,
                       ),
+                      textAlign: TextAlign.center,
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.folder_open),
-                      onPressed: _selectOutputPath,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ElevatedButton(
-                  onPressed: _saveConfig,
-                  child: const Text('保存配置'),
-                ),
+                  ),
               ],
             ),
-            const SizedBox(height: 16),
-            if (_isLoading && !_showProgress)
-              const Center(child: CircularProgressIndicator())
-            else if (_statusMessage.isNotEmpty)
-              Text(
-                _statusMessage,
-                style: TextStyle(
-                  color: _statusMessage.contains('失败') ? Colors.red : Colors.green,
-                ),
-                textAlign: TextAlign.center,
-              ),
-          ],
+          ),
         ),
       ),
     );
