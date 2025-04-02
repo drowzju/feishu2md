@@ -11,15 +11,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  
-  # 用于HTTP请求
   http: ^0.13.5
-  
-  # 用于文件选择
   file_picker: ^5.2.5
-  
-  # 用于路径操作
   path: ^1.8.2
+  path_provider: ^2.0.11  # 添加这个依赖
   
   # Material Design图标
   cupertino_icons: ^1.0.5
