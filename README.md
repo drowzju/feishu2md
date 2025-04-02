@@ -25,7 +25,7 @@ http://localhost:8080/wiki-docs?url=https://mxyxpa14jvz.feishu.cn/wiki/KKTBwagWA
 
 
 ## 拷贝后端并打包编译
-
+把golang的后端服务拷贝到前端的目录下
 copy d:\code\feishu2md-main\feishu2md-server.exe d:\code\feishu2md-main\feishu2md_app\assets\backend\
 
 cd d:\code\feishu2md-main\feishu2md_app
@@ -42,8 +42,17 @@ flutter build windows --release
 
 
 
-## TODO 后端服务未正常退出
+## 后端服务未正常退出  DONE 
+增加了homepage 的dispose
 
 ## 拆分main.dart 文件，便于维护 DONE
+拆分homepage 和backend service
 
-## 确认程序的app_id 和 app_secret 如何带入的
+
+## 确认程序的app_id 和 app_secret 如何带入的 DONE
+保存在本地。
+您可以通过以下方式快速访问该文件：
+
+1. 按下 Win + R 打开运行对话框
+2. 输入 %APPDATA%\feishu2md 并按回车
+3. 这将打开包含 config.json 文件的文件夹
