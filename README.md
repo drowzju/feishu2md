@@ -44,6 +44,6 @@ flutter build windows --release
 
 ## TODO 后端服务未正常退出
 
-## 拆分main.dart 文件，便于维护
+## 拆分main.dart 文件，便于维护 DONE
 
 ## 确认程序的app_id 和 app_secret 如何带入的

@@ -1,73 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart' as path_provider;
-import 'pages/home_page.dart';
-import 'services/backend_service.dart';
 
-// 添加全局变量跟踪后端进程
+// 全局变量跟踪后端进程
 Process? _backendProcess;
 bool _backendStarted = false;
-
-void main() async {
-  // 确保Flutter绑定初始化
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  // 启动后端服务
-  await startBackendService();
-  
-  runApp(const MyApp());
-}
-
-class MyApp extends StatefulWidget {
-  const MyApp({Key? key}) : super(key: key);
-
-  @override
-  _MyAppState createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    // 确保在应用退出时关闭后端服务
-    stopBackendService();
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    print('应用生命周期状态变化: $state');
-    // 监听多种可能导致应用退出的状态
-    if (state == AppLifecycleState.detached || 
-        state == AppLifecycleState.paused || 
-        state == AppLifecycleState.inactive) {
-      // 应用程序可能被终止
-      stopBackendService();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: '飞书文档下载器',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
-      ),
-      home: const HomePage(),
-    );
-  }
-}
 
 // 启动后端服务的函数
 Future<void> startBackendService() async {
@@ -140,8 +78,25 @@ Future<void> _extractBackendExecutable(String appDirPath) async {
 Future<void> stopBackendService() async {
   if (_backendProcess != null) {
     print('正在关闭后端服务...');
-    _backendProcess!.kill();
-    _backendStarted = false;
-    _backendProcess = null;
+    try {
+      // 使用更强力的方式关闭进程
+      _backendProcess!.kill(ProcessSignal.sigkill);
+      
+      // 额外检查进程是否已关闭
+      final exitCode = await _backendProcess!.exitCode.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {
+          print('等待进程退出超时，强制终止');
+          return -1;
+        },
+      );
+      
+      print('后端进程已退出，退出码: $exitCode');
+    } catch (e) {
+      print('关闭后端服务时出错: $e');
+    } finally {
+      _backendStarted = false;
+      _backendProcess = null;
+    }
   }
 }
