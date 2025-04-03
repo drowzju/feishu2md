@@ -6,47 +6,72 @@ import 'package:path_provider/path_provider.dart' as path_provider;
 // 全局变量跟踪后端进程
 Process? _backendProcess;
 bool _backendStarted = false;
+bool _isShuttingDown = false;
 
-// 启动后端服务的函数
+// 启动后端服务
 Future<void> startBackendService() async {
-  if (_backendStarted) return;
+  // 委托给main.dart中的实现
+}
+
+// 在应用退出时关闭后端服务
+Future<void> stopBackendService() async {
+  // 防止重复调用
+  if (_isShuttingDown) return;
+  _isShuttingDown = true;
+  
+  if (_backendProcess != null) {
+    print('正在关闭后端服务...');
+    try {
+      // 使用更强力的方式关闭进程
+      _backendProcess!.kill(ProcessSignal.sigterm);
+      
+      // 等待一段时间确保进程有机会关闭
+      await Future.delayed(const Duration(seconds: 2));
+      
+      // 如果进程仍在运行，强制终止
+      try {
+        if (_backendProcess != null) {
+          final int? pid = _backendProcess?.pid;
+          if (pid != null && Platform.isWindows) {
+            // 在Windows上使用taskkill命令强制终止进程
+            await Process.run('taskkill', ['/F', '/PID', pid.toString()]);
+            print('使用taskkill强制终止进程: $pid');
+          } else {
+            _backendProcess!.kill(ProcessSignal.sigkill);
+            print('使用sigkill强制终止进程');
+          }
+        }
+      } catch (e) {
+        print('强制终止后端进程时出错: $e');
+      }
+    } catch (e) {
+      print('关闭后端服务时出错: $e');
+    } finally {
+      _backendStarted = false;
+      _backendProcess = null;
+      _isShuttingDown = false;
+      print('后端服务已关闭');
+    }
+  }
+}
+
+// 检查后端服务是否正在运行
+Future<bool> isBackendRunning() async {
+  if (!_backendStarted || _backendProcess == null) return false;
   
   try {
-    // 获取应用程序目录
-    final appDir = await path_provider.getApplicationSupportDirectory();
-    final backendExePath = path.join(appDir.path, 'backend', 'feishu2md-server.exe');
-    
-    // 检查后端可执行文件是否存在
-    final backendFile = File(backendExePath);
-    if (!await backendFile.exists()) {
-      // 如果不存在，从应用资源中提取
-      await _extractBackendExecutable(appDir.path);
+    // 在Windows上使用tasklist检查进程是否存在
+    if (Platform.isWindows) {
+      final int? pid = _backendProcess?.pid;
+      if (pid != null) {
+        final result = await Process.run('tasklist', ['/FI', 'PID eq $pid', '/NH']);
+        return result.stdout.toString().contains(pid.toString());
+      }
     }
-    
-    // 启动后端进程
-    _backendProcess = await Process.start(
-      backendExePath,
-      ['--port', '8080'],
-      workingDirectory: path.join(appDir.path, 'backend'),
-    );
-    
-    _backendStarted = true;
-    
-    // 监听后端输出（可选，用于调试）
-    _backendProcess!.stdout.transform(utf8.decoder).listen((data) {
-      print('后端输出: $data');
-    });
-    
-    _backendProcess!.stderr.transform(utf8.decoder).listen((data) {
-      print('后端错误: $data');
-    });
-    
-    // 等待后端启动
-    await Future.delayed(const Duration(seconds: 2));
-    
-    print('后端服务已启动');
+    return false;
   } catch (e) {
-    print('启动后端服务失败: $e');
+    print('检查后端服务状态时出错: $e');
+    return false;
   }
 }
 
@@ -71,32 +96,5 @@ Future<void> _extractBackendExecutable(String appDirPath) async {
   } catch (e) {
     print('提取后端可执行文件失败: $e');
     rethrow;
-  }
-}
-
-// 在应用退出时关闭后端服务
-Future<void> stopBackendService() async {
-  if (_backendProcess != null) {
-    print('正在关闭后端服务...');
-    try {
-      // 使用更强力的方式关闭进程
-      _backendProcess!.kill(ProcessSignal.sigkill);
-      
-      // 额外检查进程是否已关闭
-      final exitCode = await _backendProcess!.exitCode.timeout(
-        const Duration(seconds: 3),
-        onTimeout: () {
-          print('等待进程退出超时，强制终止');
-          return -1;
-        },
-      );
-      
-      print('后端进程已退出，退出码: $exitCode');
-    } catch (e) {
-      print('关闭后端服务时出错: $e');
-    } finally {
-      _backendStarted = false;
-      _backendProcess = null;
-    }
   }
 }
