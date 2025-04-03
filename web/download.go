@@ -79,19 +79,6 @@ func downloadHandler(c *gin.Context) {
 
 	log.Printf("应用凭证: AppID=%s", config.Feishu.AppId)
 
-	// 更新配置中的输出路径
-	config.Output.ImageDir = filepath.Join(outputPath, "images")
-
-	// 确保输出目录存在
-	if err := os.MkdirAll(config.Output.ImageDir, 0755); err != nil {
-		log.Printf("创建输出目录失败: %s", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": fmt.Sprintf("创建输出目录失败: %s", err),
-		})
-		return
-	}
-
 	client := core.NewClient(
 		config.Feishu.AppId, config.Feishu.AppSecret,
 	)
@@ -197,12 +184,29 @@ func downloadHandler(c *gin.Context) {
 		outputPath = fullOutputPath
 	}
 
+	// 为当前文档创建专属的图片目录
+	docImagesDir := filepath.Join(outputPath, docTitle+"_images")
+	log.Printf("为文档创建专属图片目录: %s", docImagesDir)
+	if err := os.MkdirAll(docImagesDir, 0755); err != nil {
+		log.Printf("创建文档图片目录失败: %s", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("创建文档图片目录失败: %s", err),
+		})
+		return
+	}
+
+	// 更新配置中的图片输出路径为文档专属目录
+	config.Output.ImageDir = docImagesDir
+
 	// 处理图片
 	log.Printf("开始处理文档中的图片，共 %d 个", len(parser.ImgTokens))
 	zipBuffer := new(bytes.Buffer)
 	writer := zip.NewWriter(zipBuffer)
 	for i, imgToken := range parser.ImgTokens {
 		log.Printf("处理图片 %d/%d: token=%s", i+1, len(parser.ImgTokens), imgToken)
+
+		// 使用文档专属的图片目录
 		localLink, rawImage, err := client.DownloadImageRaw(ctx, imgToken, config.Output.ImageDir)
 		if err != nil {
 			log.Printf("下载图片失败: %s", err)
@@ -224,8 +228,10 @@ func downloadHandler(c *gin.Context) {
 			continue
 		}
 
-		log.Printf("图片下载成功: %s", imgFilePath)
-		markdown = strings.Replace(markdown, imgToken, localLink, 1)
+		// 修改Markdown中的图片引用路径为相对路径
+		relativeImgPath := filepath.Base(docImagesDir) + "/" + filepath.Base(localLink)
+		log.Printf("图片下载成功: %s，在Markdown中使用相对路径: %s", imgFilePath, relativeImgPath)
+		markdown = strings.Replace(markdown, imgToken, relativeImgPath, 1)
 
 		// 添加到ZIP文件
 		f, err := writer.Create(localLink)
