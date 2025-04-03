@@ -209,8 +209,25 @@ func downloadHandler(c *gin.Context) {
 			// 继续处理其他图片，而不是中断整个过程
 			continue
 		}
-		log.Printf("图片下载成功: %s", localLink)
+
+		// 确保图片文件被写入磁盘
+		imgFilePath := filepath.Join(config.Output.ImageDir, filepath.Base(localLink))
+		err = os.WriteFile(imgFilePath, rawImage, 0644)
+		if err != nil {
+			log.Printf("保存图片文件失败: %s", err)
+			continue
+		}
+
+		// 验证文件是否成功写入
+		if _, err := os.Stat(imgFilePath); os.IsNotExist(err) {
+			log.Printf("图片文件写入验证失败，文件不存在: %s", imgFilePath)
+			continue
+		}
+
+		log.Printf("图片下载成功: %s", imgFilePath)
 		markdown = strings.Replace(markdown, imgToken, localLink, 1)
+
+		// 添加到ZIP文件
 		f, err := writer.Create(localLink)
 		if err != nil {
 			log.Printf("创建ZIP文件条目失败: %s", err)
