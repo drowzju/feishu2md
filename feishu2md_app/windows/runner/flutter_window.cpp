@@ -1,6 +1,7 @@
-#include "flutter_window.h"
+﻿#include "flutter_window.h"
 
 #include <optional>
+#include <windows.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -64,6 +65,22 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   switch (message) {
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
+      break;
+    case WM_CLOSE:
+      // 在WM_CLOSE消息中处理窗口关闭事件
+      if (flutter_controller_ && flutter_controller_->engine()) {
+        // 创建方法通道
+        flutter::MethodChannel channel(
+            flutter_controller_->engine()->messenger(),
+            "com.example.feishu2md/window",
+            &flutter::StandardMethodCodec::GetInstance());
+        
+        // 调用Flutter端的方法
+        channel.InvokeMethod("onWindowClose", nullptr);
+        
+        // 给应用一些时间来处理关闭事件
+        Sleep(500);
+      }
       break;
   }
 

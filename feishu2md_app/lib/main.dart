@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // 添加这一行导入 SystemChannels
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
@@ -29,12 +30,51 @@ void main() async {
       print('收到SIGINT信号，正在关闭应用...');
       stopBackendService();
     });
+    
+    // 添加Windows特定的退出处理器
+    WidgetsBinding.instance.addObserver(WindowsExitHandler());
+    
+    // 注册Windows窗口关闭事件处理
+    registerWindowCloseHandler();
   }
   
   // 启动后端服务
   await startBackendService();
   
   runApp(const MyApp());
+}
+
+// Windows特定的退出处理器
+class WindowsExitHandler extends WidgetsBindingObserver {
+  bool _isClosing = false;
+  
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    print('Windows退出处理器: 应用生命周期状态变化: $state');
+    // 只在应用完全分离(detached)状态下关闭后端服务
+    // 其他状态(inactive, paused, hidden)在正常操作中也会频繁触发
+    if (state == AppLifecycleState.detached && !_isClosing) {
+      _isClosing = true;
+      print('Windows退出处理器: 检测到应用退出状态，关闭后端服务');
+      stopBackendService();
+    }
+  }
+  
+  @override
+  Future<bool> didPopRoute() async {
+    print('Windows退出处理器: 检测到返回路由事件，可能是窗口关闭');
+    if (!_isClosing) {
+      _isClosing = true;
+      await stopBackendService();
+    }
+    return false;
+  }
+  
+  @override
+  Future<bool> didPushRoute(String route) async {
+    print('Windows退出处理器: 检测到推送路由事件: $route');
+    return false;
+  }
 }
 
 class MyApp extends StatefulWidget {
@@ -45,17 +85,35 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  bool _isClosing = false;
+  
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    
+    // 添加应用退出时的处理
+    if (Platform.isWindows) {
+      // 使用系统通道监听窗口关闭事件
+      SystemChannels.platform.setMethodCallHandler((call) async {
+        if (call.method == 'SystemNavigator.pop' && !_isClosing) {
+          _isClosing = true;
+          print('检测到窗口关闭事件，正在关闭后端服务...');
+          await stopBackendService();
+        }
+        return null;
+      });
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     // 确保在应用退出时关闭后端服务
-    stopBackendService();
+    if (!_isClosing) {
+      _isClosing = true;
+      stopBackendService();
+    }
     super.dispose();
   }
 
@@ -63,9 +121,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     print('应用生命周期状态变化: $state');
     // 只在应用完全分离(detached)时关闭后端服务
-    // 避免在hidden或paused状态时关闭服务，因为这些状态在正常操作中也会触发
-    if (state == AppLifecycleState.detached) {
-      // 应用程序被终止时
+    if (state == AppLifecycleState.detached && !_isClosing) {
+      _isClosing = true;
       stopBackendService();
     }
   }
@@ -98,9 +155,10 @@ Future<void> startBackendService() async {
     // 确保后端目录存在
     await Directory(backendDir).create(recursive: true);
     
-    final backendExePath = path.join(appDir.path, 'backend', 'feishu2md-server.exe');
+    // 修改这里：从 backendDir 加载可执行文件，而不是 appDir
+    final backendExePath = path.join(backendDir, 'backend', 'feishu2md-server.exe');
     
-    // 检查后端可执行文件是否存在
+    // 同时也需要修改提取可执行文件的目标位置
     final backendFile = File(backendExePath);
     if (!await backendFile.exists()) {
       // 如果不存在，从应用资源中提取
@@ -180,8 +238,10 @@ Future<void> startBackendService() async {
 // 从应用资源中提取后端可执行文件
 Future<void> _extractBackendExecutable(String appDirPath) async {
   try {
-    // 创建后端目录
-    final backendDir = Directory(path.join(appDirPath, 'backend'));
+    // 使用 %APPDATA%\feishu2md\backend 作为后端目录
+    final appDataDir = Platform.environment['APPDATA'] ?? '';
+    final backendDir = Directory(path.join(appDataDir, 'feishu2md', 'backend'));
+    
     if (!await backendDir.exists()) {
       await backendDir.create(recursive: true);
     }
@@ -201,11 +261,37 @@ Future<void> _extractBackendExecutable(String appDirPath) async {
   }
 }
 
+// 注册Windows窗口关闭事件处理
+void registerWindowCloseHandler() {
+  // 使用平台通道监听窗口关闭事件
+  const channel = MethodChannel('com.example.feishu2md/window');
+  channel.setMethodCallHandler((call) async {
+    if (call.method == 'onWindowClose') {
+      print('检测到Windows窗口关闭事件，正在关闭后端服务...');
+      await stopBackendService();
+    }
+    return null;
+  });
+  
+  // 在应用启动后注册窗口关闭事件监听
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    try {
+      channel.invokeMethod('registerWindowCloseListener');
+      print('已注册Windows窗口关闭事件监听');
+    } catch (e) {
+      print('注册Windows窗口关闭事件监听失败: $e');
+    }
+  });
+}
+
 // 在应用退出时关闭后端服务
 Future<void> stopBackendService() async {
   if (_backendProcess != null) {
     print('正在关闭后端服务...');
     try {
+      // 获取进程ID用于后续检查
+      final int? pid = _backendProcess?.pid;
+      
       // 先尝试正常关闭
       _backendProcess!.kill(ProcessSignal.sigterm);
       
@@ -214,7 +300,7 @@ Future<void> stopBackendService() async {
       try {
         // 尝试等待进程正常退出
         final exitCode = await _backendProcess!.exitCode.timeout(
-          const Duration(seconds: 3),
+          const Duration(seconds: 2),
           onTimeout: () {
             print('等待进程退出超时');
             return -1;
@@ -227,14 +313,24 @@ Future<void> stopBackendService() async {
       }
       
       // 如果进程仍在运行，强制终止
-      if (!processExited && _backendProcess != null) {
+      if (!processExited && _backendProcess != null && pid != null) {
         // 在Windows上使用taskkill命令强制终止进程
         if (Platform.isWindows) {
           try {
-            final int? pid = _backendProcess?.pid;
-            if (pid != null) {
-              final result = await Process.run('taskkill', ['/F', '/PID', pid.toString()]);
-              print('使用taskkill强制终止进程: $pid, 结果: ${result.exitCode}');
+            // 使用/T参数终止进程树
+            final result = await Process.run('taskkill', ['/F', '/T', '/PID', pid.toString()]);
+            print('使用taskkill强制终止进程: $pid, 结果: ${result.exitCode}');
+            
+            // 额外检查进程是否真的被终止
+            await Future.delayed(const Duration(milliseconds: 500));
+            try {
+              final checkResult = await Process.run('tasklist', ['/FI', 'PID eq $pid', '/NH']);
+              if (checkResult.stdout.toString().contains(pid.toString())) {
+                print('警告: 进程 $pid 可能仍在运行，再次尝试终止');
+                await Process.run('taskkill', ['/F', '/T', '/PID', pid.toString()]);
+              }
+            } catch (e) {
+              print('检查进程状态时出错: $e');
             }
           } catch (e) {
             print('使用taskkill终止进程时出错: $e');
