@@ -184,66 +184,75 @@ func downloadHandler(c *gin.Context) {
 		outputPath = fullOutputPath
 	}
 
-	// 为当前文档创建专属的图片目录
-	docImagesDir := filepath.Join(outputPath, docTitle+"_images")
-	log.Printf("为文档创建专属图片目录: %s", docImagesDir)
-	if err := os.MkdirAll(docImagesDir, 0755); err != nil {
-		log.Printf("创建文档图片目录失败: %s", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": fmt.Sprintf("创建文档图片目录失败: %s", err),
-		})
-		return
-	}
-
-	// 更新配置中的图片输出路径为文档专属目录
-	config.Output.ImageDir = docImagesDir
-
-	// 处理图片
-	log.Printf("开始处理文档中的图片，共 %d 个", len(parser.ImgTokens))
-	zipBuffer := new(bytes.Buffer)
-	writer := zip.NewWriter(zipBuffer)
-	for i, imgToken := range parser.ImgTokens {
-		log.Printf("处理图片 %d/%d: token=%s", i+1, len(parser.ImgTokens), imgToken)
-
-		// 使用文档专属的图片目录
-		localLink, rawImage, err := client.DownloadImageRaw(ctx, imgToken, config.Output.ImageDir)
-		if err != nil {
-			log.Printf("下载图片失败: %s", err)
-			// 继续处理其他图片，而不是中断整个过程
-			continue
+	// 检查文档是否包含图片
+	if len(parser.ImgTokens) > 0 {
+		// 只有在有图片时才创建图片目录
+		docImagesDir := filepath.Join(outputPath, docTitle+"_images")
+		log.Printf("文档包含 %d 个图片，创建专属图片目录: %s", len(parser.ImgTokens), docImagesDir)
+		if err := os.MkdirAll(docImagesDir, 0755); err != nil {
+			log.Printf("创建文档图片目录失败: %s", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("创建文档图片目录失败: %s", err),
+			})
+			return
 		}
 
-		// 确保图片文件被写入磁盘
-		imgFilePath := filepath.Join(config.Output.ImageDir, filepath.Base(localLink))
-		err = os.WriteFile(imgFilePath, rawImage, 0644)
-		if err != nil {
-			log.Printf("保存图片文件失败: %s", err)
-			continue
-		}
+		// 更新配置中的图片输出路径为文档专属目录
+		config.Output.ImageDir = docImagesDir
 
-		// 验证文件是否成功写入
-		if _, err := os.Stat(imgFilePath); os.IsNotExist(err) {
-			log.Printf("图片文件写入验证失败，文件不存在: %s", imgFilePath)
-			continue
-		}
+		// 处理图片
+		log.Printf("开始处理文档中的图片，共 %d 个", len(parser.ImgTokens))
+		zipBuffer := new(bytes.Buffer)
+		writer := zip.NewWriter(zipBuffer)
 
-		// 修改Markdown中的图片引用路径为相对路径
-		relativeImgPath := filepath.Base(docImagesDir) + "/" + filepath.Base(localLink)
-		log.Printf("图片下载成功: %s，在Markdown中使用相对路径: %s", imgFilePath, relativeImgPath)
-		markdown = strings.Replace(markdown, imgToken, relativeImgPath, 1)
+		// 只有在有图片时才处理图片
+		if len(parser.ImgTokens) > 0 {
+			for i, imgToken := range parser.ImgTokens {
+				log.Printf("处理图片 %d/%d: token=%s", i+1, len(parser.ImgTokens), imgToken)
 
-		// 添加到ZIP文件
-		f, err := writer.Create(localLink)
-		if err != nil {
-			log.Printf("创建ZIP文件条目失败: %s", err)
-			continue
+				// 使用文档专属的图片目录
+				localLink, rawImage, err := client.DownloadImageRaw(ctx, imgToken, config.Output.ImageDir)
+				if err != nil {
+					log.Printf("下载图片失败: %s", err)
+					// 继续处理其他图片，而不是中断整个过程
+					continue
+				}
+
+				// 确保图片文件被写入磁盘
+				imgFilePath := filepath.Join(config.Output.ImageDir, filepath.Base(localLink))
+				err = os.WriteFile(imgFilePath, rawImage, 0644)
+				if err != nil {
+					log.Printf("保存图片文件失败: %s", err)
+					continue
+				}
+
+				// 验证文件是否成功写入
+				if _, err := os.Stat(imgFilePath); os.IsNotExist(err) {
+					log.Printf("图片文件写入验证失败，文件不存在: %s", imgFilePath)
+					continue
+				}
+
+				// 修改Markdown中的图片引用路径为相对路径
+				relativeImgPath := filepath.Base(docImagesDir) + "/" + filepath.Base(localLink)
+				log.Printf("图片下载成功: %s，在Markdown中使用相对路径: %s", imgFilePath, relativeImgPath)
+				markdown = strings.Replace(markdown, imgToken, relativeImgPath, 1)
+
+				// 添加到ZIP文件
+				f, err := writer.Create(localLink)
+				if err != nil {
+					log.Printf("创建ZIP文件条目失败: %s", err)
+					continue
+				}
+				_, err = f.Write(rawImage)
+				if err != nil {
+					log.Printf("写入图片数据失败: %s", err)
+					continue
+				}
+			}
 		}
-		_, err = f.Write(rawImage)
-		if err != nil {
-			log.Printf("写入图片数据失败: %s", err)
-			continue
-		}
+	} else {
+		log.Printf("文档不包含图片，跳过创建图片目录")
 	}
 
 	engine := lute.New(func(l *lute.Lute) {
