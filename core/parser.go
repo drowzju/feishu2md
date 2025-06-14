@@ -316,7 +316,7 @@ func (p *Parser) ParseDocxBlockHeading(b *lark.DocxBlock, headingLevel int) stri
 
 func (p *Parser) ParseDocxBlockImage(img *lark.DocxBlockImage) string {
 	buf := new(strings.Builder)
-	buf.WriteString(fmt.Sprintf("![](%s)", img.Token))
+	buf.WriteString(fmt.Sprintf("[[(%s)]]", img.Token))
 	buf.WriteString("\n")
 	p.ImgTokens = append(p.ImgTokens, img.Token)
 	return buf.String()
